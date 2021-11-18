@@ -1,36 +1,79 @@
-from flask import Flask, render_template, request
-from flask_socketio import SocketIO, emit, send
+from threading import Lock
+from flask import Flask, render_template, session, request, copy_current_request_context
+from flask_socketio import SocketIO, emit, join_room, leave_room, close_room, rooms, disconnect
 from engineio.payload import Payload
+import json
 
 Payload.max_decode_packets = 101
-#Flask 객체 인스턴스 생성
+async_mode = None
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret'
-socketio = SocketIO(app)
+socketio = SocketIO(app, async_mode=async_mode)
+thread = None
+thread_lock = Lock()
 
-@app.route('/',methods=('GET', 'POST')) # 접속하는 url
-def index():
-    if request.method == "POST":
-        user = request.form.get('user')
-        data = {'level': 60, 'point': 360, 'exp': 45000}
-    return render_template('index.html', user=user, data=data)
+clients = {}
 
-count = 0
+
+@app.route("/")
+def hello_world():
+    return "<p>Hello, World!</p>"
+
+
+def background_thread():
+    MOVE_JSON = {
+        'DATA_TYPE': 'moveCommand',
+        'AGV_NO': 'temp',
+        'ACTION': '1',
+        'BLOCKS': [
+            '00010002',
+            '00020003',
+        ]
+    }
+
+    while True:
+        socketio.sleep(3)
+        for AGV in clients.keys():
+            MOVE_JSON['AGV_NO'] = AGV
+            socketio.emit('move', json.dumps(MOVE_JSON), room=clients[AGV])
+
+
 @socketio.on('connect')
-def test_connect():
-    global count
-    print("socket connected")
-    count = 0
+def connect():
+    global thread
 
-@socketio.on('status')
-def my_message(data):
-    global count
-    print('received message: ' + str(data))
-    count += 1
-    if count > 10:
-        emit('response','bye')
-    else:
-        emit('response','hello')
+    clients[request.headers['AGV_NO']] = request.sid
 
-if __name__=="__main__":
-    socketio.run(app, debug=True)
+    REPORT_REQUEST = {
+        'DATA_TYPE': 'reportRqst',
+        'AGV_NO': request.headers['AGV_NO'],
+    }
+
+    socketio.emit('state', json.dumps(REPORT_REQUEST), room=request.sid)
+
+    with thread_lock:
+        if thread is None:
+            thread = socketio.start_background_task(background_thread)
+
+
+@socketio.on('disconnect')
+def disconnect():
+    print("disconnected")
+    del clients[request.headers['AGV_NO']]
+
+
+@socketio.on('state')
+def state(data):
+    state_data = json.loads(data)
+    print(state_data)
+
+
+@socketio.on('alarm')
+def alarm(data):
+    alarm_data = json.loads(data)
+    print(alarm_data)
+
+
+if __name__ == "__main__":
+    socketio.run(app)
