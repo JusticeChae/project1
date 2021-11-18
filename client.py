@@ -7,8 +7,14 @@ import json
 import time
 import random
 
-move_data = {}
 count = 0
+
+move_data = {
+    'DATA_TYPE': None,
+    'AGV_NO': None,
+    'ACTION': None,
+    'BLOCKS': None
+}
 
 test_json = {
     # fix
@@ -165,9 +171,6 @@ async def state(data):
 
 async def send_state():
     while True:
-        if(move_data is not None):
-            test_json['LOCATION'] = move_data['BLOCK'][count]
-            count = + 1
         await sio.emit('state', json.dumps(test_json))
         await sio.sleep(3)
 
@@ -177,6 +180,10 @@ async def send_state():
 @sio.on('move')
 async def move_avg(data):
     move_data = json.loads(data)
+    global count
+    if(move_data['BLOCKS'] is not None):
+        test_json['LOCATION'] = move_data['BLOCKS'][count]
+        count = + 1
     print(move_data)
 
 # 서버 연결 해제
