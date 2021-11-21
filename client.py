@@ -1,4 +1,5 @@
 import asyncio
+from asyncio.windows_events import NULL
 from os import name
 import socketio
 from flask_socketio import send, emit
@@ -6,6 +7,7 @@ import threading
 import json
 import time
 import random
+from collections import deque
 
 count = 0
 
@@ -21,9 +23,7 @@ test_json = {
     'DATA_TYPE': 'report',
     'AGV_NO': 'AGV00001',
     # nonfix
-    'LOCATION': '00010002',
-    'STATE': '1',
-    'MODE': '1',
+    'LOCATION': None,
     'DIRECTION': '0',
     # fix
     'MAX_VELOCITY': '2.5',
@@ -31,9 +31,7 @@ test_json = {
     'BELT_MAX_SPEED': '1.5',
     'COMMAND_WAIT_TIME': '10',
     'MIN_VOLTAGE': '15.6',
-    # nonfix
     'BATTERY_LVL': '30',
-    # fix
     'AGV_FIRMWARE_VERSION': '1.01'
 }
 # 알람
@@ -44,7 +42,6 @@ alarm_json = {
     'ALARMS': [
         {
             'ALARM_CD': '11',
-            'ALARM_LVL': 'level',
             'ALARM_DTL': 'Current location is not confirmed',
             'ALARM_STATUS': '0',
             'OCCUR_DT': None,
@@ -52,7 +49,6 @@ alarm_json = {
         },
         {
             'ALARM_CD': '12',
-            'ALARM_LVL': 'level',
             'ALARM_DTL': 'After going straight, position error',
             'ALARM_STATUS': '0',
             'OCCUR_DT': None,
@@ -60,7 +56,6 @@ alarm_json = {
         },
         {
             'ALARM_CD': '13',
-            'ALARM_LVL': 'level',
             'ALARM_DTL': 'After turning right 90 degrees, position error',
             'ALARM_STATUS': '0',
             'OCCUR_DT': None,
@@ -68,7 +63,6 @@ alarm_json = {
         },
         {
             'ALARM_CD': '14',
-            'ALARM_LVL': 'level',
             'ALARM_DTL': 'After turning left 90 degrees, position error',
             'ALARM_STATUS': '0',
             'OCCUR_DT': None,
@@ -76,7 +70,6 @@ alarm_json = {
         },
         {
             'ALARM_CD': '15',
-            'ALARM_LVL': 'level',
             'ALARM_DTL': 'After 180 degrees of rotation, position error',
             'ALARM_STATUS': '0',
             'OCCUR_DT': None,
@@ -84,7 +77,6 @@ alarm_json = {
         },
         {
             'ALARM_CD': '16',
-            'ALARM_LVL': 'level',
             'ALARM_DTL': 'After reversing, position error',
             'ALARM_STATUS': '0',
             'OCCUR_DT': None,
@@ -92,7 +84,6 @@ alarm_json = {
         },
         {
             'ALARM_CD': '21',
-            'ALARM_LVL': 'level',
             'ALARM_DTL': 'LOW BATTERY',
             'ALARM_STATUS': '0',
             'OCCUR_DT': None,
@@ -100,7 +91,6 @@ alarm_json = {
         },
         {
             'ALARM_CD': '22',
-            'ALARM_LVL': 'level',
             'ALARM_DTL': 'Over-current occurs',
             'ALARM_STATUS': '0',
             'OCCUR_DT': None,
@@ -108,7 +98,6 @@ alarm_json = {
         },
         {
             'ALARM_CD': '31',
-            'ALARM_LVL': 'level',
             'ALARM_DTL': 'Belt driving failed',
             'ALARM_STATUS': '0',
             'OCCUR_DT': None,
@@ -116,7 +105,6 @@ alarm_json = {
         },
         {
             'ALARM_CD': '32',
-            'ALARM_LVL': 'level',
             'ALARM_DTL': 'Failed to drive Tray',
             'ALARM_STATUS': '0',
             'OCCUR_DT': None,
@@ -130,21 +118,45 @@ sio = socketio.AsyncClient()
 
 # 알람 전송
 
+ALARM_CD_LIST = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+ALARM_CD_USED = deque([])
+temp_end_alarm = 10
+temp_start_alarm = 10
+alarm_report_json = {
+    'DATA_TYPE': 'alarm',
+    'AGV_NO': 'AGV0001',
+    'ALARMS': []
+}
+
+# 랜덤 ALARM_CD
+
+
+async def random_alarm():
+    global temp_end_alarm, temp_start_alarm
+    temp_start_alarm = random.choice(ALARM_CD_LIST)
+    ALARM_CD_USED.append(temp_start_alarm)
+    ALARM_CD_LIST.remove(temp_start_alarm)
+    if(len(ALARM_CD_USED) == 5):
+        temp_end_alarm = ALARM_CD_USED.popleft()
+        ALARM_CD_LIST.append(temp_end_alarm)
+    alarm_json['ALARMS'][temp_start_alarm]['ALARM_STATUS'] = 1
+    alarm_json['ALARMS'][temp_start_alarm]['OCCUR_DT'] = time.strftime(
+        '20%y%m%d %H:%M:%S')
+    alarm_json['ALARMS'][temp_start_alarm]['END_DT'] = None
+    if(temp_end_alarm != 10):
+        alarm_report_json['ALARMS'].append(
+            alarm_json['ALARMS'][temp_end_alarm])
+        alarm_json['ALARMS'][temp_end_alarm]['END_DT'] = time.strftime(
+            '20%y%m%d %H:%M:%S')
+        alarm_json['ALARMS'][temp_end_alarm]['ALARM_STATUS'] = 0
+    alarm_report_json['ALARMS'].append(alarm_json['ALARMS'][temp_start_alarm])
+
 
 async def send_alarm():
-    # 랜덤 ALARM_CD
-    ALARM_CD_LIST = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    temp_alarm = random.choice(ALARM_CD_LIST)
-    alarm_json['ALARMS'][temp_alarm]['ALARM_STATUS'] = 1
-    alarm_json['ALARMS'][temp_alarm]['OCCUR_DT'] = time.strftime(
-        '20%y%m%d %H:%M:%S')
-    if(alarm_json['ALARMS'][temp_alarm]['END_DT'] is not None):
-        alarm_json['ALARMS'][temp_alarm]['END_DT'] is None
-    await sio.emit('alarm', json.dumps(alarm_json))
-    await asyncio.sleep(4)
-    alarm_json['ALARMS'][temp_alarm]['END_DT'] = time.strftime(
-        '20%y%m%d %H:%M:%S')
-    alarm_json['ALARMS'][temp_alarm]['ALARM_STATUS'] = 0
+    await random_alarm()
+    await sio.emit('alarm_report', json.dumps(alarm_report_json))
+    alarm_report_json['ALARMS'] = []
+    await asyncio.sleep(0.5)
 
 
 # connect되면 알람 발생
@@ -152,18 +164,18 @@ async def send_alarm():
 async def connect():
     while True:
         await send_alarm()
-        await sio.sleep(1)
 
 
 # AGV 상태요청 receive
 
-@sio.on('state')
+@sio.on('state_request')
 async def state(data):
     json_data = json.loads(data)
 
     # 상태보고 전송 Thread 시작
     if json_data['DATA_TYPE'] == 'reportRqst':
-        await sio.sleep(1)
+        await sio.sleep(0.05)
+
         sio.start_background_task(send_state)
 
 # AGV 상태보고 전송
@@ -171,19 +183,21 @@ async def state(data):
 
 async def send_state():
     while True:
-        await sio.emit('state', json.dumps(test_json))
-        await sio.sleep(3)
+        await sio.emit('state_report', json.dumps(test_json))
+        await sio.sleep(0.5)
+
 
 # AGV 이동 명령 receive
 
 
-@sio.on('move')
+@sio.on('move_request')
 async def move_avg(data):
     move_data = json.loads(data)
     global count
-    if(move_data['BLOCKS'] is not None):
-        test_json['LOCATION'] = move_data['BLOCKS'][count]
-        count = + 1
+    await sio.sleep(3)
+    test_json['LOCATION'] = move_data['BLOCKS'][count]
+    if(count < len(move_data['BLOCKS'])-1):
+        count += 1
     print(move_data)
 
 # 서버 연결 해제
@@ -200,6 +214,7 @@ async def main():
     # aws ec2
     # await sio.connect('http://13.124.72.207:5000', headers={'AGV_NO': 'AGV00001'})
     await sio.wait()
+
 
 if __name__ == '__main__':
     asyncio.run(main())
